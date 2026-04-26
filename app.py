@@ -43,7 +43,9 @@ def build_deck():
 def calculate_score(hand):
     score, aces = 0, 0
     for card in hand:
-        rank = card[:-1]
+        # Safely extract the rank by keeping ONLY letters and numbers (ignores emojis)
+        rank = ''.join([c for c in card if c.isalnum()])
+        
         if rank in ['J', 'Q', 'K']: 
             score += 10
         elif rank == 'A': 
@@ -51,6 +53,7 @@ def calculate_score(hand):
             score += 11
         else: 
             score += int(rank)
+            
     while score > 21 and aces:
         score -= 10
         aces -= 1
