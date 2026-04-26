@@ -243,6 +243,148 @@ if state["game_phase"] == "playing" and all_turns_done and len(state["players"])
 if auto_refresh_needed and state["game_phase"] in ["betting", "playing"]:
     time.sleep(2)
     st.rerun()
+        elif p_score == dealer_score:
+            p_data["bankroll"] += p_data["bet"] # Push (get bet back)
+            
+    state["game_phase"] = "finished"
+
+# --- UI INTERFACE ---
+st.title("🃏 Rudy's Blackjack")
+st.markdown("*The only casino where the dealer actively hates you.*")
+
+auto_refresh_needed = False
+
+# 1. Join / Leave Sidebar
+with st.sidebar:
+    st.header("The Lobby")
+    if "player_name" not in st.session_state:
+        st.session_state.player_name = ""
+
+    if not st.session_state.player_name:
+        new_name = st.text_input("Enter your name to sit at the table:")
+        if st.button("Join Table") and new_name:
+            if new_name in state["players"]: st.error("Name taken!")
+            else:
+                st.session_state.player_name = new_name
+                state["players"][new_name] = {"hand": [], "status": "waiting", "bankroll": 1000, "bet": 0}
+                state["rudy_broadcast"] = f"Oh great, {new_name} just sat down. There goes the neighborhood."
+                st.rerun()
+    else:
+        name = st.session_state.player_name
+        bankroll = state["players"][name]["bankroll"]
+        st.success(f"Playing as **{name}** | Bankroll: **${bankroll}**")
+        if st.button("Leave Table"):
+            del state["players"][name]
+            st.session_state.player_name = ""
+            if len(state["players"]) == 0: state["game_phase"] = "lobby"
+            st.rerun()
+
+    st.divider()
+    st.write("**Players at table:**")
+    for p_name, p_data in state["players"].items():
+        st.write(f"- {p_name} (${p_data['bankroll']})")
+
+# 2. Main Game Board
+st.info(f"🤖 **Rudy says:** \"{state['rudy_broadcast']}\"")
+
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    st.subheader("🤖 Dealer (Rudy)")
+    if state["game_phase"] == "playing":
+        st.write(f"Cards: {state['dealer_hand'][0]} | [Hidden]")
+    elif state["game_phase"] == "finished":
+        score = calculate_score(state["dealer_hand"])
+        st.write(f"Cards: {' | '.join(state['dealer_hand'])}")
+        st.write(f"Score: **{score}**")
+    else:
+        st.write("Waiting for action...")
+        
+    if state["game_phase"] in ["lobby", "finished"] and len(state["players"]) > 0:
+        if st.button("Start New Round (Open Bets)"):
+            open_betting()
+            st.rerun()
+
+with col2:
+    st.subheader("👥 The Victims (Players)")
+    
+    if not state["players"]:
+        st.write("Table is empty. Waiting for fresh meat...")
+
+    all_bets_in = True
+    all_turns_done = True
+    
+    for p_name, p_data in state["players"].items():
+        is_me = ("player_name" in st.session_state and st.session_state.player_name == p_name)
+        
+        with st.container():
+            st.markdown(f"**{p_name}** - Bankroll: ${p_data['bankroll']} (Bet: ${p_data['bet']})")
+            
+            # Phase: Betting
+            if state["game_phase"] == "betting":
+                if p_data["status"] == "betting":
+                    all_bets_in = False
+                    if is_me:
+                        bet_amount = st.number_input("Place your bet:", min_value=10, max_value=p_data["bankroll"], step=10, key=f"bet_{p_name}")
+                        if st.button("Lock in Bet", key=f"lock_{p_name}"):
+                            p_data["bet"] = bet_amount
+                            p_data["bankroll"] -= bet_amount
+                            p_data["status"] = "bet_locked"
+                            state["rudy_broadcast"] = f"{p_name} bet ${bet_amount}. {random.choice(MONEY_INSULTS)}"
+                            st.rerun()
+                elif p_data["status"] == "bet_locked":
+                    st.write("✅ Bet locked. Waiting for others...")
+                    if is_me: auto_refresh_needed = True
+
+            # Phase: Playing
+            elif state["game_phase"] == "playing":
+                if p_data["status"] == "playing":
+                    all_turns_done = False
+                    score = calculate_score(p_data["hand"])
+                    st.write(f"Cards: {' | '.join(p_data['hand'])} (Score: {score})")
+                    
+                    if is_me:
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("Hit", key=f"hit_{p_name}"):
+                                p_data["hand"].append(deal_card(state["deck"]))
+                                if calculate_score(p_data["hand"]) > 21:
+                                    p_data["status"] = "busted"
+                                    state["rudy_broadcast"] = f"{p_name} busted! Thanks for the ${p_data['bet']}."
+                                else:
+                                    state["rudy_broadcast"] = f"{p_name} hit. {random.choice(INSULTS)}"
+                                st.rerun()
+                        with c2:
+                            if st.button("Stand", key=f"stand_{p_name}"):
+                                p_data["status"] = "stood"
+                                state["rudy_broadcast"] = f"{p_name} stood. Coward."
+                                st.rerun()
+                else:
+                    score = calculate_score(p_data["hand"])
+                    st.write(f"Cards: {' | '.join(p_data['hand'])} (Score: {score}) - *{p_data['status'].upper()}*")
+                    if is_me: auto_refresh_needed = True
+                    
+            # Phase: Finished
+            elif state["game_phase"] == "finished":
+                score = calculate_score(p_data["hand"])
+                st.write(f"Cards: {' | '.join(p_data['hand'])} (Score: {score})")
+            
+            st.divider()
+
+# Background Engine Logic (Transitioning Phases)
+if state["game_phase"] == "betting" and all_bets_in and len(state["players"]) > 0:
+    start_round()
+    st.rerun()
+
+if state["game_phase"] == "playing" and all_turns_done and len(state["players"]) > 0:
+    dealer_play()
+    st.rerun()
+
+# --- SMART AUTO-REFRESH ---
+# If you are waiting on someone else to make a move, the app pings the server every 2 seconds.
+if auto_refresh_needed and state["game_phase"] in ["betting", "playing"]:
+    time.sleep(2)
+    st.rerun()
     if "player_name" not in st.session_state:
         st.session_state.player_name = ""
 
